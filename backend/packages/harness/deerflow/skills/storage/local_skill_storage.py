@@ -263,7 +263,10 @@ class LocalSkillStorage(SkillStorage):
         if not history_path.exists():
             return []
         records: list[dict] = []
-        for line in history_path.read_text(encoding="utf-8").splitlines():
+        # Split on "\n" only: str.splitlines() also breaks on U+0085, U+2028 and
+        # U+2029, which json.dumps(..., ensure_ascii=False) leaves raw inside a
+        # record (for example in pasted SKILL.md content).
+        for line in history_path.read_text(encoding="utf-8").split("\n"):
             if not line.strip():
                 continue
             records.append(json.loads(line))

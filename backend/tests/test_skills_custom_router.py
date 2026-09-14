@@ -763,6 +763,46 @@ def test_custom_skill_delete_preserves_history_and_allows_restore(monkeypatch, t
         assert refresh_calls == [("refresh", "default"), ("refresh", "default")]
 
 
+def test_custom_skill_history_with_unicode_line_separator_allows_restore(monkeypatch, tmp_path):
+    """History records are JSON lines; U+2028 inside a record (e.g. pasted text) must not break reading them."""
+    skills_root = tmp_path / "skills"
+    from deerflow.config.paths import Paths
+
+    user_custom = _user_custom_dir(tmp_path, "default")
+    custom_dir = user_custom / "demo-skill"
+    custom_dir.mkdir(parents=True, exist_ok=True)
+    original_content = _skill_content("demo-skill") + "Pasted from the web:\u2028keep this line\n"
+    (custom_dir / "SKILL.md").write_text(original_content, encoding="utf-8")
+
+    config = SimpleNamespace(
+        skills=SimpleNamespace(get_skills_path=lambda: skills_root, container_path="/mnt/skills", use="deerflow.skills.storage.local_skill_storage:LocalSkillStorage"),
+        skill_evolution=SimpleNamespace(enabled=True, moderation_model_name=None),
+    )
+    monkeypatch.setattr("deerflow.config.get_app_config", lambda: config)
+    monkeypatch.setattr("deerflow.config.paths.get_paths", lambda: Paths(base_dir=tmp_path))
+    monkeypatch.setattr("deerflow.config.paths._paths", None)
+    monkeypatch.setattr("app.gateway.routers.skills.scan_skill_content", lambda *args, **kwargs: _async_scan("allow", "ok"))
+
+    async def _refresh(user_id: str):
+        return None
+
+    monkeypatch.setattr("app.gateway.routers.skills.refresh_user_skills_system_prompt_cache_async", _refresh)
+    monkeypatch.setattr("app.gateway.routers.skills.get_effective_user_id", lambda: "default")
+
+    app = _make_test_app(config)
+
+    with TestClient(app) as client:
+        assert client.delete("/api/skills/custom/demo-skill").status_code == 200
+
+        history_response = client.get("/api/skills/custom/demo-skill/history")
+        assert history_response.status_code == 200
+        assert history_response.json()["history"][-1]["prev_content"] == original_content
+
+        rollback_response = client.post("/api/skills/custom/demo-skill/rollback", json={"history_index": -1})
+        assert rollback_response.status_code == 200
+        assert (custom_dir / "SKILL.md").read_text(encoding="utf-8") == original_content
+
+
 def test_custom_skill_delete_continues_when_history_write_is_readonly(monkeypatch, tmp_path):
     skills_root = tmp_path / "skills"
     from deerflow.config.paths import Paths
